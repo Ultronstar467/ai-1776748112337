@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Snake Game</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #222;
+            font-family: 'Press Start 2P', cursive;
+            color: #eee;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            overflow: hidden; /* Prevent scrollbars from appearing */
+        }
+
+        /* Basic fallback if font cannot be loaded */
+        body {
+            font-family: monospace, sans-serif;
+        }
+
+        /* Attempt to load a retro gaming font from Google Fonts */
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        body {
+            font-family: 'Press Start 2P', cursive;
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 5px solid #555;
+            background-color: #333;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5); /* Glowing effect */
+            border-radius: 10px;
+        }
+
+        h1 {
+            color: #0f0;
+            text-shadow: 0 0 5px #0f0;
+            margin-bottom: 20px;
+        }
+
+        #gameCanvas {
+            background-color: #000;
+            border: 2px solid #555;
+        }
+
+        #game-info {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+            padding: 0 5px;
+        }
+
+        #score {
+            color: #0f0;
+        }
+
+        #game-message {
+            margin-top: 15px;
+            font-size: 1.1em;
+            color: #ff0;
+            text-align: center;
+            min-height: 2em; /* Ensure consistent height for messages */
+        }
+
+        #start-button {
+            padding: 10px 20px;
+            font-size: 1.2em;
+            cursor: pointer;
+            background-color: #008cba;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin-top: 20px;
+            transition: background-color 0.3s ease;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        #start-button:hover {
+            background-color: #005f7a;
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>SNAKE</h1>
+        <div id="game-info">
+            <span>SCORE: <span id="score">0</span></span>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="game-message">Press 'Start Game' to play!</div>
+        <button id="start-button">Start Game</button>
+    </div>
+
+    <script>
+        const API_BASE_URL = "http://127.0.0.1:8000"; // Ensure this matches your FastAPI server port
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreDisplay = document.getElementById("score");
+        const gameMessage = document.getElementById("game-message");
+        const startButton = document.getElementById("start-button");
+
+        // Game parameters (will be synced with backend initially)
+        let BOARD_WIDTH = 20;
+        let BOARD_HEIGHT = 20;
+        const CELL_SIZE = 25; // Pixels per cell
+
+        // Set initial canvas dimensions, will be updated by backend response
+        canvas.width = BOARD_WIDTH * CELL_SIZE;
+        canvas.height = BOARD_HEIGHT * CELL_SIZE;
+
+        let snake = [];
+        let food = [0, 0];
+        let score = 0;
+        let direction = "right"; // Initial client-side direction guess
+        let gameOver = true;
+        let gameLoopInterval = null;
+        let currentSpeed_ms = 300; // Initial speed, will be updated by backend
+
+        // Function to draw game elements on the canvas
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear the canvas
+
+            // Draw snake
+            ctx.fillStyle = "lime";
+            snake.forEach(segment => {
+                ctx.fillRect(segment[0] * CELL_SIZE, segment[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                ctx.strokeStyle = "#333"; // Optional: Add a border to segments
+                ctx.strokeRect(segment[0] * CELL_SIZE, segment[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            });
+
+            // Draw food
+            ctx.fillStyle = "red";
+            ctx.fillRect(food[0] * CELL_SIZE, food[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            ctx.strokeStyle = "#555";
+            ctx.strokeRect(food[0] * CELL_SIZE, food[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        }
+
+        // Helper to update frontend state from a backend response
+        function updateFrontendState(state) {
+            // Update local game variables based on the authoritative backend state
+            snake = state.snake;
+            food = state.food;
+            score = state.score;
+            direction = state.direction; // Sync client's direction with server's
+            gameOver = state.game_over;
+            
+            // Update board dimensions if they changed (not expected for this game, but good practice)
+            if (state.board_width !== BOARD_WIDTH || state.board_height !== BOARD_HEIGHT) {
+                BOARD_WIDTH = state.board_width;
+                BOARD_HEIGHT = state.board_height;
+                canvas.width = BOARD_WIDTH * CELL_SIZE;
+                canvas.height = BOARD_HEIGHT * CELL_SIZE;
+            }
+
+            // Update UI elements
+            scoreDisplay.textContent = score;
+
+            if (gameOver) {
+                gameMessage.textContent = `GAME OVER! Score: ${score}. Press 'Start Game' to play again!`;
+                gameMessage.style.color = 'red';
+                startButton.style.display = 'block'; // Show start button
+                clearInterval(gameLoopInterval); // Stop the game loop
+            } else {
+                gameMessage.textContent = "USE ARROW KEYS TO MOVE!";
+                gameMessage.style.color = '#ff0';
+            }
+
+            drawGame(); // Redraw the game board with the new state
+
+            // Adjust game speed if the backend indicates a change
+            if (state.speed_ms !== currentSpeed_ms) {
+                currentSpeed_ms = state.speed_ms;
+                if (!gameOver) { // Only restart interval if game is still active
+                    clearInterval(gameLoopInterval);
+                    gameLoopInterval = setInterval(gameTick, currentSpeed_ms);
+                }
+            }
+        }
+
+        // Function to send a move request to the backend
+        async function sendMove(newDirection) {
+            if (gameOver) return; // Don't send moves if game is over
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/move`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ direction: newDirection }),
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const state = await response.json(); // Backend returns the new state after the move
+                updateFrontendState(state); // Update local state and UI
+            } catch (error) {
+                console.error("Error sending move:", error);
+                gameMessage.textContent = "Error sending move to server!";
+                gameMessage.style.color = 'orange';
+            }
+        }
+
+        // The main game tick function, called by setInterval
+        async function gameTick() {
+            if (!gameOver) {
+                // Send a move request with the current intended direction.
+                // The backend will process this as one game step.
+                await sendMove(direction);
+            }
+        }
+
+        // Event listener for arrow keys to change snake's direction
+        document.addEventListener("keydown", async (e) => {
+            if (gameOver) return; // Ignore input if game is over
+
+            let newDirection = direction;
+            switch (e.key) {
+                case "ArrowUp":
+                    newDirection = "up";
+                    break;
+                case "ArrowDown":
+                    newDirection = "down";
+                    break;
+                case "ArrowLeft":
+                    newDirection = "left";
+                    break;
+                case "ArrowRight":
+                    newDirection = "right";
+                    break;
+                default:
+                    return; // Ignore other keys
+            }
+
+            // Client-side check to prevent immediate reverse (backend also validates)
+            if (
+                (newDirection === "up" && direction === "down") ||
+                (newDirection === "down" && direction === "up") ||
+                (newDirection === "left" && direction === "right") ||
+                (newDirection === "right" && direction === "left")
+            ) {
+                return;
+            }
+
+            // Update the client's current intended direction
+            direction = newDirection;
+            e.preventDefault(); // Prevent browser scrolling with arrow keys
+        });
+
+        // Start game button click handler
+        startButton.addEventListener("click", async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/start_game`, {
+                    method: "POST",
+                });
+                const state = await response.json();
+                updateFrontendState(state); // Update local state from server
+                gameOver = false; // Game is now running
+                startButton.style.display = 'none'; // Hide start button
+
+                // Initialize or restart the game loop with the speed provided by the backend
+                clearInterval(gameLoopInterval); // Clear any existing interval
+                currentSpeed_ms = state.speed_ms; // Get initial speed from backend
+                gameLoopInterval = setInterval(gameTick, currentSpeed_ms);
+
+            } catch (error) {
+                console.error("Error starting game:", error);
+                gameMessage.textContent = "ERROR: Could not connect to game server!";
+                gameMessage.style.color = 'orange';
+            }
+        });
+
+        // Initial setup: Fetch game state and draw once when the page loads
+        // This ensures the initial board and score are displayed correctly.
+        fetchGameState();
+    </script>
+</body>
+</html>
